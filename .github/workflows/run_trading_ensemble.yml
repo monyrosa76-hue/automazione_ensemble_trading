@@ -1,0 +1,62 @@
+name: Trading TD Ensemble - autorun
+
+on:
+  schedule:
+    # Orari in UTC. Ora legale italiana (CEST, UTC+2) = 08:00/15:00/21:00 Italia.
+    # Quando torna l'ora solare (CET, UTC+1, fine ottobre) cambia 6/13/19 in 7/14/20.
+    - cron: '0 6 * * 1-5'
+    - cron: '0 13 * * 1-5'
+    - cron: '0 19 * * 1-5'
+  workflow_dispatch: {}   # permette anche l'avvio manuale dalla tab Actions
+
+permissions:
+  contents: write   # serve per poter pubblicare la release con gh release create
+
+jobs:
+  run-notebook:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Installa dipendenze
+        run: |
+          pip install --upgrade pip
+          pip install jupyter nbconvert ipykernel requests pandas openpyxl pytz numpy
+          python -m ipykernel install --user --name python3
+
+      - name: Esegui il notebook
+        env:
+          TWELVEDATA_API_KEY: ${{ secrets.TWELVEDATA_API_KEY }}
+        run: |
+          jupyter nbconvert --to notebook --execute --inplace \
+            trading_td_ensemble_colab_autorun.ipynb \
+            --ExecutePreprocessor.timeout=2400
+
+      - name: Trova il file Ensemble generato
+        id: findfile
+        run: |
+          FILE=$(ls Ensemble_H4H1M15_*.xlsx 2>/dev/null | tail -n 1)
+          if [ -z "$FILE" ]; then
+            echo "Nessun file generato in questo run (probabilmente 'Ensemble vuoto': nessun setup valido)."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "file=$FILE" >> "$GITHUB_OUTPUT"
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Pubblica il file come Release GitHub (Zapier lo preleva da qui)
+        if: steps.findfile.outputs.skip == 'false'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="ensemble-$(date +%Y%m%d-%H%M%S)"
+          gh release create "$TAG" "${{ steps.findfile.outputs.file }}" \
+            --title "Ensemble $TAG" \
+            --notes "Generato automaticamente dal workflow schedulato."
