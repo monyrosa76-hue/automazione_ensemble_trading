@@ -2,11 +2,14 @@ name: Trading TD Ensemble - autorun
 
 on:
   schedule:
-    # Orari in UTC. Ora legale italiana (CEST, UTC+2) = 08:00/15:00/21:00 Italia.
+    # Orari in UTC, spostati di qualche minuto rispetto all'ora tonda per evitare
+    # la coda di GitHub Actions (i cron "in punta d'ora" sono spesso ritardati o scartati:
+    # https://docs.github.com/actions/using-workflows/events-that-trigger-workflows).
+    # CEST (ora legale, UTC+2) = 08:05/15:05/21:05 Italia.
     # Quando torna l'ora solare (CET, UTC+1, fine ottobre) cambia 6/13/19 in 7/14/20.
-    - cron: '0 6 * * 1-5'
-    - cron: '0 13 * * 1-5'
-    - cron: '0 19 * * 1-5'
+    - cron: '5 6 * * 1-5'
+    - cron: '5 13 * * 1-5'
+    - cron: '5 19 * * 1-5'
   workflow_dispatch: {}   # permette anche l'avvio manuale dalla tab Actions
 
 permissions:
