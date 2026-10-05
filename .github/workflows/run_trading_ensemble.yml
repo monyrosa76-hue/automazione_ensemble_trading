@@ -39,15 +39,15 @@ jobs:
           TWELVEDATA_API_KEY: ${{ secrets.TWELVEDATA_API_KEY }}
         run: |
           jupyter nbconvert --to notebook --execute --inplace \
-            trading_td_ensemble_colab_autorun.ipynb \
+            trading_h4h1m15_v4_colab.ipynb \
             --ExecutePreprocessor.timeout=2400
 
-      - name: Trova il file Ensemble generato
+      - name: Trova il file generato dallo scanner v4
         id: findfile
         run: |
-          FILE=$(ls Ensemble_H4H1M15_*.xlsx 2>/dev/null | tail -n 1)
+          FILE=$(ls TRADING_V4/Scan_v4_*.xlsx 2>/dev/null | tail -n 1)
           if [ -z "$FILE" ]; then
-            echo "Nessun file generato in questo run (probabilmente 'Ensemble vuoto': nessun setup valido)."
+            echo "Nessun file Scan_v4_*.xlsx generato in questo run."
             echo "skip=true" >> "$GITHUB_OUTPUT"
           else
             echo "file=$FILE" >> "$GITHUB_OUTPUT"
