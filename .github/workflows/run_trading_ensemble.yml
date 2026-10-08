@@ -1,65 +1,137 @@
-name: Trading TD Ensemble - autorun
+# .github/workflows/trading_v5.yml
+# Esegue trading_v5.py su GitHub Actions.
+#
+# NOVITÀ rispetto alla prima versione:
+#  - accetta il secret con più nomi possibili (TWELVEDATA_API_KEY, TWELVE_DATA_API_KEY, ...)
+#  - si ferma subito, con messaggio chiaro, se il secret non viene letto
+#  - fallisce se non viene prodotto nessun file .xlsx (prima "riusciva" a vuoto)
+#  - può pubblicare il report anche come Release, oltre che come artifact
+#
+# IMPORTANTE: il blocco "cache" conserva TRADING_V5/cache tra un'esecuzione e l'altra.
+# Senza di esso ogni run riparte dalle sole 5000 candele scaricabili e la storia non cresce.
+name: Trading v5
 
 on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "scan oppure backtest"
+        default: "backtest"
+        type: choice
+        options: [backtest, scan]
+      tf_set:
+        description: "Set timeframe per lo scanner"
+        default: "D1H4H1"
+        type: choice
+        options: [D1H4H1, H4H1M15]
+      entry_mode:
+        description: "Modalita ingresso per lo scanner"
+        default: "reversal"
+        type: choice
+        options: [zone, reversal, pinbar]
+      presets:
+        description: "Preset del backtest (separati da virgola, vuoto = quelli di default)"
+        default: ""
+      pubblica_release:
+        description: "Pubblica il report anche come Release"
+        default: true
+        type: boolean
   schedule:
-    # Orari in UTC, spostati di qualche minuto rispetto all'ora tonda per evitare
-    # la coda di GitHub Actions (i cron "in punta d'ora" sono spesso ritardati o scartati:
-    # https://docs.github.com/actions/using-workflows/events-that-trigger-workflows).
-    # CEST (ora legale, UTC+2) = 08:05/15:05/21:05 Italia.
-    # Quando torna l'ora solare (CET, UTC+1, fine ottobre) cambia 6/13/19 in 7/14/20.
-    - cron: '5 6 * * 1-5'
-    - cron: '5 13 * * 1-5'
-    - cron: '5 19 * * 1-5'
-  workflow_dispatch: {}   # permette anche l'avvio manuale dalla tab Actions
+    - cron: "0 5 1 * *"      # backtest mensile: 1 del mese, 05:00 UTC
 
 permissions:
-  contents: write   # serve per poter pubblicare la release con gh release create
+  contents: write            # necessario per creare la Release
 
 jobs:
-  run-notebook:
+  run:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 120
+    env:
+      # Primo nome non vuoto tra questi. Aggiungi il tuo se il secret si chiama diversamente.
+      TWELVEDATA_API_KEY: >-
+        ${{ secrets.TWELVEDATA_API_KEY
+         || secrets.TWELVE_DATA_API_KEY
+         || secrets.TD_API_KEY
+         || secrets.TWELVEDATA_KEY
+         || secrets.API_KEY_TWELVEDATA
+         || secrets.APIKEY_TWELVEDATA }}
     steps:
-      - name: Checkout repo
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - name: Verifica il secret della API key
+        run: |
+          if [ -z "$TWELVEDATA_API_KEY" ]; then
+            echo "::error::Nessun secret trovato. Vai in Settings > Secrets and variables > Actions, scheda 'Secrets', copia il NOME esatto del secret della chiave Twelvedata e aggiungilo all'elenco nel blocco env: di questo workflow (oppure rinomina il secret in TWELVEDATA_API_KEY)."
+            exit 1
+          fi
+          echo "Secret trovato: ${#TWELVEDATA_API_KEY} caratteri."
+
+      - uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: "3.11"
 
       - name: Installa dipendenze
-        run: |
-          pip install --upgrade pip
-          pip install jupyter nbconvert ipykernel requests pandas openpyxl pytz numpy
-          python -m ipykernel install --user --name python3
+        run: pip install --quiet requests pandas numpy openpyxl pytz
 
-      - name: Esegui il notebook
+      # Chiave sempre nuova (così la cache viene salvata a ogni run),
+      # restore-keys recupera la più recente disponibile.
+      - name: Ripristina cache candele
+        uses: actions/cache@v4
+        with:
+          path: TRADING_V5/cache
+          key: trading-v5-cache-${{ github.run_id }}
+          restore-keys: |
+            trading-v5-cache-
+
+      - name: Esegui
         env:
-          TWELVEDATA_API_KEY: ${{ secrets.TWELVEDATA_API_KEY }}
-        run: |
-          jupyter nbconvert --to notebook --execute --inplace \
-            trading_h4h1m15_v4_colab.ipynb \
-            --ExecutePreprocessor.timeout=2400
+          MODE: ${{ inputs.mode || 'backtest' }}
+          TF_SET: ${{ inputs.tf_set || 'D1H4H1' }}
+          ENTRY_MODE: ${{ inputs.entry_mode || 'reversal' }}
+          BACKTEST_PRESETS: ${{ inputs.presets }}
+          OUT_DIR: TRADING_V5
+          REQUEST_DELAY: "8"
+        run: python trading_v5.py
 
-      - name: Trova il file generato dallo scanner v4
-        id: findfile
+      - name: Verifica che il report esista
         run: |
-          FILE=$(ls TRADING_V4/Scan_v4_*.xlsx 2>/dev/null | tail -n 1)
-          if [ -z "$FILE" ]; then
-            echo "Nessun file Scan_v4_*.xlsx generato in questo run."
-            echo "skip=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "file=$FILE" >> "$GITHUB_OUTPUT"
-            echo "skip=false" >> "$GITHUB_OUTPUT"
+          shopt -s nullglob
+          files=(TRADING_V5/*.xlsx)
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "::error::Nessun file .xlsx prodotto: controlla il log dello step 'Esegui'."
+            exit 1
           fi
+          echo "REPORT=${files[-1]}" >> $GITHUB_ENV
+          echo "Report: ${files[-1]}"
 
-      - name: Pubblica il file come Release GitHub (Zapier lo preleva da qui)
-        if: steps.findfile.outputs.skip == 'false'
+      - name: Carica report come artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: report-${{ inputs.mode || 'backtest' }}-${{ github.run_id }}
+          path: TRADING_V5/*.xlsx
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Pubblica Release
+        if: ${{ inputs.pubblica_release != false }}
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
         run: |
-          TAG="ensemble-$(date +%Y%m%d-%H%M%S)"
-          gh release create "$TAG" "${{ steps.findfile.outputs.file }}" \
-            --title "Ensemble $TAG" \
-            --notes "Generato automaticamente dal workflow schedulato."
+          TAG="v5-${{ inputs.mode || 'backtest' }}-$(date -u +%Y%m%d-%H%M)"
+          gh release create "$TAG" "$REPORT" \
+            --title "Trading v5 - ${{ inputs.mode || 'backtest' }} $(date -u +%d/%m/%Y) UTC" \
+            --notes "Report generato dal run ${{ github.run_id }}."
+
+      - name: Riepilogo candele in cache
+        if: always()
+        run: |
+          echo "### Candele in cache" >> $GITHUB_STEP_SUMMARY
+          shopt -s nullglob
+          files=(TRADING_V5/cache/*.csv)
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "- nessun file in cache (primo avvio oppure cache non ripristinata)" >> $GITHUB_STEP_SUMMARY
+          else
+            for f in "${files[@]}"; do
+              echo "- $(basename "$f"): $(( $(wc -l < "$f") - 1 )) righe" >> $GITHUB_STEP_SUMMARY
+            done
+          fi
