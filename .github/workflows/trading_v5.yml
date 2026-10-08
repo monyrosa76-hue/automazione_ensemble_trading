@@ -1,0 +1,81 @@
+# .github/workflows/trading_v5.yml
+# Esegue trading_v5.py su GitHub Actions.
+# IMPORTANTE: il blocco "cache" serve a conservare TRADING_V5/cache tra un'esecuzione
+# e l'altra. Senza di esso ogni run riparte dalle sole 5000 candele scaricabili e la
+# storia del backtest non cresce mai.
+name: Trading v5
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "scan oppure backtest"
+        default: "backtest"
+        type: choice
+        options: [backtest, scan]
+      tf_set:
+        description: "Set timeframe per lo scanner"
+        default: "D1H4H1"
+        type: choice
+        options: [D1H4H1, H4H1M15]
+      entry_mode:
+        description: "Modalita ingresso per lo scanner"
+        default: "reversal"
+        type: choice
+        options: [zone, reversal, pinbar]
+      presets:
+        description: "Preset del backtest (separati da virgola, vuoto = tutti quelli di default)"
+        default: ""
+  schedule:
+    - cron: "0 5 1 * *"      # backtest mensile: 1° del mese, 05:00 UTC
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Installa dipendenze
+        run: pip install --quiet requests pandas numpy openpyxl pytz
+
+      # Ripristina la cache delle candele: la chiave cambia a ogni run (così viene
+      # sempre salvata), restore-keys recupera la più recente disponibile.
+      - name: Ripristina cache candele
+        uses: actions/cache@v4
+        with:
+          path: TRADING_V5/cache
+          key: trading-v5-cache-${{ github.run_id }}
+          restore-keys: |
+            trading-v5-cache-
+
+      - name: Esegui
+        env:
+          TWELVEDATA_API_KEY: ${{ secrets.TWELVEDATA_API_KEY }}
+          MODE: ${{ inputs.mode || 'backtest' }}
+          TF_SET: ${{ inputs.tf_set || 'D1H4H1' }}
+          ENTRY_MODE: ${{ inputs.entry_mode || 'reversal' }}
+          BACKTEST_PRESETS: ${{ inputs.presets }}
+          OUT_DIR: TRADING_V5
+          REQUEST_DELAY: "8"
+        run: python trading_v5.py
+
+      - name: Carica report
+        uses: actions/upload-artifact@v4
+        with:
+          name: report-${{ inputs.mode || 'backtest' }}-${{ github.run_id }}
+          path: |
+            TRADING_V5/*.xlsx
+          retention-days: 90
+
+      - name: Riepilogo candele in cache
+        if: always()
+        run: |
+          echo "### Candele in cache" >> $GITHUB_STEP_SUMMARY
+          for f in TRADING_V5/cache/*.csv; do
+            echo "- $(basename "$f"): $(( $(wc -l < "$f") - 1 )) righe" >> $GITHUB_STEP_SUMMARY
+          done
