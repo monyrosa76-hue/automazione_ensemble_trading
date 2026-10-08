@@ -798,7 +798,13 @@ def run_backtest(api_key, out_dir):
         if series:
             data[name] = series
     if not data:
-        log("Nessun dato disponibile: impossibile procedere."); return
+        raise SystemExit(
+            "ERRORE: nessun dato disponibile.\n"
+            "Cause tipiche, in ordine di probabilità:\n"
+            "  1) API key Twelvedata assente o non leggibile (secret non impostato o con nome diverso);\n"
+            "  2) cache vuota al primo avvio e nessuna chiave con cui scaricare;\n"
+            "  3) simboli non coperti dal piano sottoscritto.\n"
+            "Controlla il foglio/log 'Dati caricati' e il messaggio di ciascun timeframe.")
 
     # precalcolo per i preset non-v3 (una volta per strumento e per set di timeframe)
     all_tr, summary, gate_rows = [], [], []
@@ -1008,10 +1014,17 @@ def run_scan(api_key, out_dir):
 # =============================================================================
 def main():
     api_key = get_api_key(); out_dir = get_out_dir()
+    cache_files = [f for f in os.listdir(os.path.join(out_dir, "cache")) if f.endswith(".csv")]
+    log(f"Chiave API: {'presente (' + str(len(api_key)) + ' caratteri)' if api_key else 'ASSENTE'} | "
+        f"file in cache: {len(cache_files)} | modalità: {MODE} | cartella output: {out_dir}")
     if not api_key:
-        if MODE == "scan":
-            raise SystemExit("API key Twelvedata assente (TWELVEDATA_API_KEY).")
-        log("(!) API key assente: uso solo i dati già in cache.")
+        if MODE == "scan" or not cache_files:
+            raise SystemExit(
+                "ERRORE: API key Twelvedata assente.\n"
+                "Su GitHub Actions: Settings > Secrets and variables > Actions > scheda 'Secrets'.\n"
+                "Il nome del secret deve coincidere con quello indicato nel file del workflow.\n"
+                "Attenzione: un valore inserito nella scheda 'Variables' NON viene letto come secret.")
+        log("(!) API key assente: proseguo con i soli dati già in cache.")
     (run_scan if MODE == "scan" else run_backtest)(api_key, out_dir)
 
 if __name__ == "__main__":
